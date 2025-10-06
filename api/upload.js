@@ -19,7 +19,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Allow from any origin (or restrict if needed)
+  // Allow from any origin
   res.setHeader('Access-Control-Allow-Origin', '*');
 
   if (req.method !== 'POST') {
@@ -46,7 +46,15 @@ export default async function handler(req, res) {
 
   try {
     const uploadUrl = await s3.getSignedUrlPromise('putObject', params);
-    res.status(200).json({ uploadUrl, key });
+    
+    // Return both the upload URL and the public URL
+    const publicUrl = `https://s3.eu-central-003.backblazeb2.com/Lizard/${key}`;
+    
+    res.status(200).json({ 
+      uploadUrl, 
+      key,
+      publicUrl 
+    });
   } catch (error) {
     console.error('Error generating signed URL:', error);
     res.status(500).json({ error: 'Could not generate signed URL' });
