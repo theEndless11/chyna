@@ -9,50 +9,81 @@ const s3 = new AWS.S3({
   signatureVersion: 'v4'
 });
 
-const BUCKET = 'Lizard'; // ✅ Correct casing
+const BUCKET = 'Lizard';
 
 export default async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method === 'OPTIONS') {
+    console.log('OPTIONS request received');
+    return res.status(200).end();
+  }
+  if (req.method !== 'GET') {
+    console.log('Invalid HTTP method:', req.method);
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
 
   try {
     const { username } = req.query;
+    console.log('username query param:', username);
 
-    // ✅ No prefix – list all objects
+    // List everything in the bucket
     const list = await s3.listObjectsV2({
       Bucket: BUCKET,
       Prefix: ''
     }).promise();
 
-    console.log("📦 Fetched Keys:", list.Contents.map(i => i.Key));
+    console.log('listObjectsV2 result:', JSON.stringify(list, null, 2));
+
+    if (!list.Contents) {
+      console.log('No Contents in list result.');
+      return res.json({ success: true, shorts: [] });
+    }
+
+    const allKeys = list.Contents.map(item => item.Key);
+    console.log('All Keys:', allKeys);
+
+    // Filter for JSON metadata
+    const jsonKeys = allKeys.filter(key => key.toLowerCase().endsWith('.json'));
+    console.log('JSON Keys:', jsonKeys);
 
     const shorts = await Promise.all(
-      list.Contents
-        .filter(item => item.Key.endsWith('.json')) // Only parse JSON metadata
-        .map(async (item) => {
+      jsonKeys.map(async (key) => {
+        try {
           const obj = await s3.getObject({
             Bucket: BUCKET,
-            Key: item.Key
+            Key: key
           }).promise();
-          return JSON.parse(obj.Body.toString());
-        })
+          const body = obj.Body.toString();
+          console.log(`Content of ${key}:`, body);
+          const parsed = JSON.parse(body);
+          return parsed;
+        } catch (e) {
+          console.log('Error getting/parsing key:', key, e);
+          return null;
+        }
+      })
     );
 
+    // Filter out any nulls from parse errors
+    const validShorts = shorts.filter(s => s != null);
+    console.log('Parsed Shorts:', validShorts);
+
     const filtered = username
-      ? shorts.filter(s => s.username === username)
-      : shorts;
+      ? validShorts.filter(s => s.username === username)
+      : validShorts;
+
+    console.log('Filtered Shorts (after username filter):', filtered);
 
     filtered.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
 
+    console.log('Sorted Final Shorts:', filtered);
+
     res.json({ success: true, shorts: filtered });
   } catch (error) {
-    console.error('❌ Error fetching shorts:', error);
+    console.error('❌ S3 fetch error (full):', error);
     res.status(500).json({ error: 'Failed to fetch', details: error.message });
   }
 };
-
-
