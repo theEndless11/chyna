@@ -10,24 +10,36 @@ const s3 = new AWS.S3({
 });
 
 export default async function handler(req, res) {
+  // CORS preflight support
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.status(200).end();
+    return;
+  }
+
+  // Allow from any origin (or restrict if needed)
+  res.setHeader('Access-Control-Allow-Origin', '*');
+
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
     return;
   }
 
   const { filename, contentType, userId } = req.body;
+
   if (!filename || !contentType || !userId) {
     return res.status(400).json({ error: 'Missing parameters' });
   }
 
-  // Create a unique key
   const timestamp = Date.now();
   const key = `videos/${userId}-${timestamp}-${filename}`;
 
   const params = {
     Bucket: 'Lizard',
     Key: key,
-    Expires: 60 * 5, // 5 min expiry
+    Expires: 60 * 5,
     ContentType: contentType,
     ACL: 'public-read'
   };
@@ -39,4 +51,4 @@ export default async function handler(req, res) {
     console.error('Error generating signed URL:', error);
     res.status(500).json({ error: 'Could not generate signed URL' });
   }
-};
+}
