@@ -1,11 +1,11 @@
-import { IncomingForm } from 'formidable';
+import { IncomingForm } from 'formidable-serverless';
 import fs from 'fs';
 import path from 'path';
 import AWS from 'aws-sdk';
 import ffmpeg from 'fluent-ffmpeg';
 import os from 'os';
 
-// Disable default body parser (Next.js requirement for formidable)
+// Disable body parsing by Next.js (required)
 export const config = {
   api: {
     bodyParser: false,
@@ -52,13 +52,14 @@ async function uploadToS3(key, body, contentType) {
       Key: key,
       Body: body,
       ContentType: contentType,
-      ACL: 'public-read', // make accessible publicly or configure accordingly
+      ACL: 'public-read', // adjust if needed
     })
     .promise();
 }
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'POST')
+    return res.status(405).json({ error: 'Method not allowed' });
 
   try {
     const { fields, files } = await parseForm(req);
@@ -68,23 +69,23 @@ export default async function handler(req, res) {
     if (!videoFile) return res.status(400).json({ error: 'No video file uploaded' });
     if (!userId) return res.status(400).json({ error: 'Missing userId' });
 
-    // Temp file paths
-    const tempVideoPath = videoFile.filepath || videoFile.path; // formidable v2 vs v1
+    // Paths (formidable-serverless uses file.path)
+    const tempVideoPath = videoFile.filepath || videoFile.path;
     const tempThumbnailPath = path.join(os.tmpdir(), `thumb-${Date.now()}.png`);
 
-    // Generate thumbnail image from video
+    // Generate thumbnail
     await generateThumbnail(tempVideoPath, tempThumbnailPath);
 
-    // Read thumbnail file
+    // Read thumbnail into buffer
     const thumbnailBuffer = fs.readFileSync(tempThumbnailPath);
 
-    // Generate unique keys for S3
+    // Unique keys for S3 upload
     const timestamp = Date.now();
     const videoKey = `videos/${userId}-${timestamp}-${videoFile.originalFilename}`;
     const thumbKey = `thumbnails/${userId}-${timestamp}.png`;
     const metaKey = `metadata/${userId}-${timestamp}.json`;
 
-    // Upload video and thumbnail
+    // Upload video and thumbnail in parallel
     const [videoUpload, thumbUpload] = await Promise.all([
       uploadToS3(videoKey, fs.createReadStream(tempVideoPath), videoFile.mimetype),
       uploadToS3(thumbKey, thumbnailBuffer, 'image/png'),
@@ -107,7 +108,7 @@ export default async function handler(req, res) {
     // Upload metadata JSON
     await uploadToS3(metaKey, JSON.stringify(metadata), 'application/json');
 
-    // Cleanup temp thumbnail file
+    // Cleanup thumbnail file
     fs.unlinkSync(tempThumbnailPath);
 
     res.status(200).json({ success: true, short: metadata });
@@ -116,3 +117,4 @@ export default async function handler(req, res) {
     res.status(500).json({ error: 'Upload failed', details: error.message });
   }
 }
+
