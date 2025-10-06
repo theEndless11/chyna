@@ -19,40 +19,41 @@ export default async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  try {
-    const { username } = req.query;
+ try {
+  const { username } = req.query;
 
-    // List all objects (no prefix)
-    const list = await s3.listObjectsV2({
-      Bucket: BUCKET,
-      Prefix: ''
-    }).promise();
+  const list = await s3.listObjectsV2({
+    Bucket: BUCKET,
+    Prefix: ''
+  }).promise();
 
-    // Filter only JSON metadata files
-    const shorts = await Promise.all(
-      list.Contents
-        .filter(item => item.Key.endsWith('.json')) // Optional: Only process .json
-        .map(async (item) => {
-          const obj = await s3.getObject({
-            Bucket: BUCKET,
-            Key: item.Key
-          }).promise();
-          return JSON.parse(obj.Body.toString());
-        })
-    );
+  console.log("📦 Object Keys in Bucket:", list.Contents.map(item => item.Key));
 
-    // Filter by username if provided
-    const filtered = username
-      ? shorts.filter(s => s.username === username)
-      : shorts;
+  const shorts = await Promise.all(
+    list.Contents
+      .filter(item => item.Key.endsWith('.json'))
+      .map(async (item) => {
+        const obj = await s3.getObject({
+          Bucket: BUCKET,
+          Key: item.Key
+        }).promise();
 
-    // Sort by upload date
-    filtered.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+        const parsed = JSON.parse(obj.Body.toString());
+        console.log("✅ Parsed:", parsed);
+        return parsed;
+      })
+  );
 
-    res.json({ success: true, shorts: filtered });
-  } catch (error) {
-    console.error('S3 fetch error:', error);
-    res.status(500).json({ error: 'Failed to fetch', details: error.message });
-  }
+  const filtered = username
+    ? shorts.filter(s => s.username === username)
+    : shorts;
+
+  filtered.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+
+  res.json({ success: true, shorts: filtered });
+} catch (error) {
+  console.error('❌ S3 fetch error:', error);
+  res.status(500).json({ error: 'Failed to fetch', details: error.message });
+}
 };
 
