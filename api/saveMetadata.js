@@ -44,13 +44,13 @@ async function uploadToS3(key, body, contentType) {
     Bucket: 'Lizard',
     Key: key,
     Body: body,
-    ContentType: contentType,
-    ACL: 'public-read'
+    ContentType: contentType
+    // ACL removed - not supported properly by B2
   }).promise();
 }
 
 export default async function handler(req, res) {
-  // ✅ Handle CORS preflight
+  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -59,7 +59,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  // ✅ Apply CORS headers for POST too
+  // Apply CORS headers for POST
   res.setHeader('Access-Control-Allow-Origin', '*');
 
   if (req.method !== 'POST') {
@@ -80,10 +80,10 @@ export default async function handler(req, res) {
     await generateThumbnail(tempVideoPath, thumbnailPath);
     const thumbnailBuffer = fs.readFileSync(thumbnailPath);
 
-    // 3. Generate S3 keys
+    // 3. Generate S3 keys (store at root level)
     const metaTimestamp = Date.now();
-    const thumbKey = `thumbnails/${userId}-${metaTimestamp}.png`;
-    const metaKey = `metadata/${userId}-${metaTimestamp}.json`;
+    const thumbKey = `thumb-${userId}-${metaTimestamp}.png`;
+    const metaKey = `meta-${userId}-${metaTimestamp}.json`;
 
     // 4. Upload thumbnail
     const thumbUpload = await uploadToS3(thumbKey, thumbnailBuffer, 'image/png');
@@ -105,10 +105,13 @@ export default async function handler(req, res) {
     // 6. Upload metadata JSON
     await uploadToS3(metaKey, JSON.stringify(metadata), 'application/json');
 
+    // Clean up temp files
+    fs.unlinkSync(tempVideoPath);
+    fs.unlinkSync(thumbnailPath);
+
     res.status(200).json({ success: true, short: metadata });
   } catch (error) {
     console.error('Error in saveMetadata:', error);
     res.status(500).json({ error: 'Failed in metadata', details: error.message });
   }
 }
-
