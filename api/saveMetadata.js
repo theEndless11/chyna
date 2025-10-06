@@ -50,6 +50,18 @@ async function uploadToS3(key, body, contentType) {
 }
 
 export default async function handler(req, res) {
+  // ✅ Handle CORS preflight
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.status(200).end();
+    return;
+  }
+
+  // ✅ Apply CORS headers for POST too
+  res.setHeader('Access-Control-Allow-Origin', '*');
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -60,21 +72,23 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Missing parameters' });
     }
 
-    // Download the video to temp
+    // 1. Download uploaded video
     const tempVideoPath = await downloadToTemp(videoKey);
+
+    // 2. Generate thumbnail
     const thumbnailPath = path.join(os.tmpdir(), `thumb-${Date.now()}.png`);
     await generateThumbnail(tempVideoPath, thumbnailPath);
-
     const thumbnailBuffer = fs.readFileSync(thumbnailPath);
 
+    // 3. Generate S3 keys
     const metaTimestamp = Date.now();
     const thumbKey = `thumbnails/${userId}-${metaTimestamp}.png`;
     const metaKey = `metadata/${userId}-${metaTimestamp}.json`;
 
-    // Upload thumbnail
+    // 4. Upload thumbnail
     const thumbUpload = await uploadToS3(thumbKey, thumbnailBuffer, 'image/png');
 
-    // Build metadata
+    // 5. Build metadata object
     const metadata = {
       id: `${userId}-${metaTimestamp}`,
       userId,
@@ -88,7 +102,7 @@ export default async function handler(req, res) {
       views: 0
     };
 
-    // Upload metadata JSON
+    // 6. Upload metadata JSON
     await uploadToS3(metaKey, JSON.stringify(metadata), 'application/json');
 
     res.status(200).json({ success: true, short: metadata });
@@ -97,3 +111,4 @@ export default async function handler(req, res) {
     res.status(500).json({ error: 'Failed in metadata', details: error.message });
   }
 }
+
