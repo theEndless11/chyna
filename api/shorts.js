@@ -23,7 +23,7 @@ export default async (req, res) => {
   const { username } = req.query;
 
   const list = await s3.listObjectsV2({
-    Bucket: BUCKET,
+    Bucket: 'Lizard',
     Prefix: ''
   }).promise();
 
