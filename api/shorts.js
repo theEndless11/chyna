@@ -9,7 +9,7 @@ const s3 = new AWS.S3({
   signatureVersion: 'v4'
 });
 
-const BUCKET = 'lizard';
+const BUCKET = 'Lizard';
 
 export default async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
