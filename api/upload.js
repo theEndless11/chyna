@@ -34,14 +34,15 @@ export default async function handler(req, res) {
   }
 
   const timestamp = Date.now();
-  const key = `videos/${userId}-${timestamp}-${filename}`;
+  const key = `${userId}-${timestamp}-${filename}`;
 
   const params = {
     Bucket: 'Lizard',
     Key: key,
     Expires: 60 * 5,
-    ContentType: contentType,
-    ACL: 'public-read'
+    ContentType: contentType
+    // ACL removed - Backblaze B2 doesn't fully support ACL in S3-compatible API
+    // Files will be accessible based on bucket settings
   };
 
   try {
