@@ -2,8 +2,8 @@ const AWS = require('aws-sdk');
 
 const s3 = new AWS.S3({
   endpoint: 's3.eu-central-003.backblazeb2.com',
-  accessKeyId: 'K003a54JRMDdmTm5HC',
-  secretAccessKey: 'joAjLaN9f5xc',
+  accessKeyId: '0032cb5d211d8f30000000001',
+  secretAccessKey: 'K003a54JRMDdmTm5HC/joAjLaN9f5xc',
   s3ForcePathStyle: true,
   signatureVersion: 'v4'
 });
