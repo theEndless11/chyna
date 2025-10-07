@@ -1,6 +1,6 @@
 const fetch = require('node-fetch');
 
-// Backblaze B2 Native API Upload
+// Disable automatic body parsing
 module.exports = async function handler(req, res) {
   try {
     console.log('=== Upload API Called ===');
@@ -20,45 +20,27 @@ module.exports = async function handler(req, res) {
       return res.status(405).json({ error: 'Method not allowed' });
     }
 
-    console.log('About to check body...');
-    console.log('req.body exists?', !!req.body);
-    console.log('req.body type:', typeof req.body);
+    console.log('About to read body...');
     
-    let body = req.body;
+    // Always read body manually - don't access req.body
+    const buffers = [];
     
-    // If body is not parsed, read it manually
-    if (!body) {
-      console.log('Body is null/undefined, reading stream...');
-      const buffers = [];
-      
-      req.on('data', chunk => {
-        console.log('Received chunk:', chunk.length, 'bytes');
-        buffers.push(chunk);
-      });
-      
-      await new Promise((resolve, reject) => {
-        req.on('end', () => {
-          console.log('Stream ended');
-          resolve();
-        });
-        req.on('error', (err) => {
-          console.error('Stream error:', err);
-          reject(err);
-        });
-      });
-      
-      const rawBody = Buffer.concat(buffers).toString('utf-8');
-      console.log('Raw body:', rawBody);
-      
-      try {
-        body = JSON.parse(rawBody);
-      } catch (e) {
-        console.error('Parse error:', e.message);
-        return res.status(400).json({ error: 'Invalid JSON', raw: rawBody });
-      }
+    for await (const chunk of req) {
+      console.log('Received chunk:', chunk.length, 'bytes');
+      buffers.push(chunk);
     }
-
-    console.log('Parsed body:', JSON.stringify(body));
+    
+    const rawBody = Buffer.concat(buffers).toString('utf-8');
+    console.log('Raw body:', rawBody);
+    
+    let body;
+    try {
+      body = JSON.parse(rawBody);
+      console.log('Parsed body:', JSON.stringify(body));
+    } catch (e) {
+      console.error('Parse error:', e.message);
+      return res.status(400).json({ error: 'Invalid JSON', raw: rawBody });
+    }
 
     const { filename, contentType, userId } = body;
     console.log('Extracted:', { filename, contentType, userId });
@@ -138,3 +120,10 @@ module.exports = async function handler(req, res) {
     });
   }
 }
+
+// Disable automatic body parsing
+module.exports.config = {
+  api: {
+    bodyParser: false,
+  },
+};
