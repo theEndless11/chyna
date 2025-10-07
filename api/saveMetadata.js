@@ -1,30 +1,50 @@
-import AWS from 'aws-sdk';
+import axios from 'axios';
 import ffmpeg from 'fluent-ffmpeg';
+import ffmpegPath from 'ffmpeg-static';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-const s3 = new AWS.S3({
-  endpoint: 'https://s3.eu-central-003.backblazeb2.com',
-  region: 'eu-central-003',
-  accessKeyId: process.env.B2_KEY_ID,
-  secretAccessKey: process.env.B2_SECRET,
-  s3ForcePathStyle: true,
-  signatureVersion: 'v4'
-});
+// Set ffmpeg path
+ffmpeg.setFfmpegPath(ffmpegPath);
 
-function downloadToTemp(s3key) {
+// B2 Authorization helper
+async function getB2Auth() {
+  const authResponse = await axios.get(
+    'https://api.backblazeb2.com/b2api/v2/b2_authorize_account',
+    {
+      auth: {
+        username: process.env.B2_KEY_ID,
+        password: process.env.B2_SECRET
+      }
+    }
+  );
+  return authResponse.data;
+}
+
+// Download file from B2
+async function downloadFromB2(fileName, authToken, downloadUrl) {
   const tmpPath = path.join(os.tmpdir(), `video-${Date.now()}`);
-  const file = fs.createWriteStream(tmpPath);
+  const writer = fs.createWriteStream(tmpPath);
+
+  const response = await axios({
+    method: 'GET',
+    url: `${downloadUrl}/file/Lizard/${fileName}`,
+    headers: {
+      Authorization: authToken
+    },
+    responseType: 'stream'
+  });
+
+  response.data.pipe(writer);
+
   return new Promise((resolve, reject) => {
-    s3.getObject({ Bucket: 'Lizard', Key: s3key })
-      .createReadStream()
-      .pipe(file)
-      .on('finish', () => resolve(tmpPath))
-      .on('error', err => reject(err));
+    writer.on('finish', () => resolve(tmpPath));
+    writer.on('error', reject);
   });
 }
 
+// Generate thumbnail
 function generateThumbnail(videoPath, thumbnailPath) {
   return new Promise((resolve, reject) => {
     ffmpeg(videoPath)
@@ -39,14 +59,46 @@ function generateThumbnail(videoPath, thumbnailPath) {
   });
 }
 
-async function uploadToS3(key, body, contentType) {
-  return s3.upload({
-    Bucket: 'Lizard',
-    Key: key,
-    Body: body,
-    ContentType: contentType
-    // ACL removed - not supported properly by B2
-  }).promise();
+// Upload to B2 using Native API
+async function uploadToB2(fileName, filePath, contentType) {
+  const { authorizationToken, apiUrl, downloadUrl } = await getB2Auth();
+
+  // Get upload URL
+  const uploadUrlResponse = await axios.post(
+    `${apiUrl}/b2api/v2/b2_get_upload_url`,
+    { bucketId: process.env.B2_BUCKET_ID },
+    {
+      headers: {
+        Authorization: authorizationToken
+      }
+    }
+  );
+
+  const { uploadUrl, authorizationToken: uploadToken } = uploadUrlResponse.data;
+
+  // Read file
+  const fileBuffer = fs.readFileSync(filePath);
+  
+  // Calculate SHA1
+  const crypto = require('crypto');
+  const sha1 = crypto.createHash('sha1').update(fileBuffer).digest('hex');
+
+  // Upload file
+  const uploadResponse = await axios.post(uploadUrl, fileBuffer, {
+    headers: {
+      'Authorization': uploadToken,
+      'X-Bz-File-Name': encodeURIComponent(fileName),
+      'Content-Type': contentType,
+      'Content-Length': fileBuffer.length,
+      'X-Bz-Content-Sha1': sha1
+    }
+  });
+
+  return {
+    fileName: uploadResponse.data.fileName,
+    fileId: uploadResponse.data.fileId,
+    url: `${downloadUrl}/file/Lizard/${fileName}`
+  };
 }
 
 export default async function handler(req, res) {
@@ -72,21 +124,23 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Missing parameters' });
     }
 
-    // 1. Download uploaded video
-    const tempVideoPath = await downloadToTemp(videoKey);
+    // Get B2 auth
+    const { authorizationToken, downloadUrl } = await getB2Auth();
+
+    // 1. Download uploaded video from B2
+    const tempVideoPath = await downloadFromB2(videoKey, authorizationToken, downloadUrl);
 
     // 2. Generate thumbnail
     const thumbnailPath = path.join(os.tmpdir(), `thumb-${Date.now()}.png`);
     await generateThumbnail(tempVideoPath, thumbnailPath);
-    const thumbnailBuffer = fs.readFileSync(thumbnailPath);
 
-    // 3. Generate S3 keys (store at root level)
+    // 3. Generate keys
     const metaTimestamp = Date.now();
     const thumbKey = `thumb-${userId}-${metaTimestamp}.png`;
     const metaKey = `meta-${userId}-${metaTimestamp}.json`;
 
-    // 4. Upload thumbnail
-    const thumbUpload = await uploadToS3(thumbKey, thumbnailBuffer, 'image/png');
+    // 4. Upload thumbnail to B2
+    const thumbUpload = await uploadToB2(thumbKey, thumbnailPath, 'image/png');
 
     // 5. Build metadata object
     const metadata = {
@@ -95,23 +149,29 @@ export default async function handler(req, res) {
       title,
       description,
       uploadedAt: new Date().toISOString(),
-      videoUrl: `https://s3.eu-central-003.backblazeb2.com/Lizard/${videoKey}`,
-      thumbnailUrl: thumbUpload.Location,
+      videoUrl: `${downloadUrl}/file/Lizard/${videoKey}`,
+      thumbnailUrl: thumbUpload.url,
       hearts: 0,
       comments: 0,
       views: 0
     };
 
-    // 6. Upload metadata JSON
-    await uploadToS3(metaKey, JSON.stringify(metadata), 'application/json');
+    // 6. Upload metadata JSON to B2
+    const metadataJsonPath = path.join(os.tmpdir(), `meta-${Date.now()}.json`);
+    fs.writeFileSync(metadataJsonPath, JSON.stringify(metadata));
+    await uploadToB2(metaKey, metadataJsonPath, 'application/json');
 
     // Clean up temp files
     fs.unlinkSync(tempVideoPath);
     fs.unlinkSync(thumbnailPath);
+    fs.unlinkSync(metadataJsonPath);
 
     res.status(200).json({ success: true, short: metadata });
   } catch (error) {
     console.error('Error in saveMetadata:', error);
-    res.status(500).json({ error: 'Failed in metadata', details: error.message });
+    res.status(500).json({ 
+      error: 'Failed in metadata', 
+      details: error.response?.data || error.message 
+    });
   }
 }
