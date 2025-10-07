@@ -2,23 +2,29 @@ const fetch = require('node-fetch');
 const crypto = require('crypto');
 
 module.exports = async function handler(req, res) {
+  // Set CORS headers FIRST, before anything else
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Upload-Url, X-Upload-Token, X-File-Key, X-Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    console.log('Preflight request');
+    return res.status(200).end();
+  }
+
   try {
     console.log('=== Upload Proxy Called ===');
-    
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-    if (req.method === 'OPTIONS') {
-      return res.status(200).end();
-    }
+    console.log('Method:', req.method);
 
     if (req.method !== 'POST') {
       return res.status(405).json({ error: 'Method not allowed' });
     }
 
-    // Get parameters from query string
-    const { uploadUrl, uploadToken, key, contentType } = req.query;
+    // Get parameters from headers instead of query string
+    const uploadUrl = req.headers['x-upload-url'];
+    const uploadToken = req.headers['x-upload-token'];
+    const key = req.headers['x-file-key'];
+    const contentType = req.headers['x-content-type'];
     
     console.log('Upload params:', { uploadUrl: uploadUrl?.substring(0, 50), key, contentType });
 
