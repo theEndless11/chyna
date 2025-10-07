@@ -1,4 +1,4 @@
-const axios = require('axios');
+const fetch = require('node-fetch');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
 const fs = require('fs');
@@ -11,16 +11,21 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 
 // B2 Authorization helper
 async function getB2Auth() {
-  const authResponse = await axios.get(
+  const authString = Buffer.from(`${process.env.B2_KEY_ID}:${process.env.B2_SECRET}`).toString('base64');
+  const authResponse = await fetch(
     'https://api.backblazeb2.com/b2api/v2/b2_authorize_account',
     {
-      auth: {
-        username: process.env.B2_KEY_ID,
-        password: process.env.B2_SECRET
+      headers: {
+        Authorization: `Basic ${authString}`
       }
     }
   );
-  return authResponse.data;
+
+  if (!authResponse.ok) {
+    throw new Error(`B2 Auth failed: ${authResponse.status}`);
+  }
+
+  return await authResponse.json();
 }
 
 // Download file from B2
@@ -81,7 +86,6 @@ async function uploadToB2(fileName, filePath, contentType) {
   const fileBuffer = fs.readFileSync(filePath);
   
   // Calculate SHA1
-  const crypto = require('crypto');
   const sha1 = crypto.createHash('sha1').update(fileBuffer).digest('hex');
 
   // Upload file
@@ -101,6 +105,8 @@ async function uploadToB2(fileName, filePath, contentType) {
     url: `${downloadUrl}/file/Lizard/${fileName}`
   };
 }
+
+module.exports = handler;
 
 export default async function handler(req, res) {
   // Handle CORS preflight
