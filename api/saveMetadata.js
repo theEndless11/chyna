@@ -1,43 +1,42 @@
-const fetch = require('node-fetch');
-const ffmpeg = require('fluent-ffmpeg');
-const ffmpegPath = require('ffmpeg-static');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const crypto = require('crypto');
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { promisify } from 'util';
+import crypto from 'crypto';
+import fetch from 'node-fetch';
+import axios from 'axios';
+import ffmpeg from 'fluent-ffmpeg';
+import ffmpegStatic from 'ffmpeg-static';
 
-// Set ffmpeg path
-ffmpeg.setFfmpegPath(ffmpegPath);
+ffmpeg.setFfmpegPath(ffmpegStatic);
 
-// B2 Authorization helper
+// Helper: get B2 auth
 async function getB2Auth() {
   const authString = Buffer.from(`${process.env.B2_KEY_ID}:${process.env.B2_SECRET}`).toString('base64');
-  const authResponse = await fetch(
-    'https://api.backblazeb2.com/b2api/v2/b2_authorize_account',
-    {
-      headers: {
-        Authorization: `Basic ${authString}`
-      }
+  const authResponse = await fetch('https://api.backblazeb2.com/b2api/v2/b2_authorize_account', {
+    headers: {
+      Authorization: `Basic ${authString}`
     }
-  );
-
+  });
   if (!authResponse.ok) {
-    throw new Error(`B2 Auth failed: ${authResponse.status}`);
+    const txt = await authResponse.text();
+    throw new Error(`B2 Auth failed: ${authResponse.status} ${txt}`);
   }
-
-  return await authResponse.json();
+  return authResponse.json();
 }
 
-// Download file from B2
-async function downloadFromB2(fileName, authToken, downloadUrl) {
+// Helper: download file from B2 (Native API)
+async function downloadFromB2(fileKey, authorizationToken, downloadUrl) {
   const tmpPath = path.join(os.tmpdir(), `video-${Date.now()}`);
   const writer = fs.createWriteStream(tmpPath);
 
+  // The URL for file download in B2 native is: <downloadUrl>/file/<bucketName>/<fileKey>
+  const url = `${downloadUrl}/file/${process.env.B2_BUCKET_NAME}/${fileKey}`;
   const response = await axios({
     method: 'GET',
-    url: `${downloadUrl}/file/Lizard/${fileName}`,
+    url,
     headers: {
-      Authorization: authToken
+      Authorization: authorizationToken
     },
     responseType: 'stream'
   });
@@ -50,7 +49,7 @@ async function downloadFromB2(fileName, authToken, downloadUrl) {
   });
 }
 
-// Generate thumbnail
+// Helper: generate thumbnail
 function generateThumbnail(videoPath, thumbnailPath) {
   return new Promise((resolve, reject) => {
     ffmpeg(videoPath)
@@ -61,124 +60,147 @@ function generateThumbnail(videoPath, thumbnailPath) {
         size: '320x240',
       })
       .on('end', () => resolve(thumbnailPath))
-      .on('error', err => reject(err));
+      .on('error', (err) => reject(err));
   });
 }
 
-// Upload to B2 using Native API
-async function uploadToB2(fileName, filePath, contentType) {
-  const { authorizationToken, apiUrl, downloadUrl } = await getB2Auth();
+// Helper: upload a local file to B2 using native API
+async function uploadToB2(fileKey, localFilePath, contentType) {
+  const auth = await getB2Auth();
+  const { authorizationToken, apiUrl, downloadUrl } = auth;
 
   // Get upload URL
-  const uploadUrlResponse = await axios.post(
+  const uploadUrlResp = await axios.post(
     `${apiUrl}/b2api/v2/b2_get_upload_url`,
     { bucketId: process.env.B2_BUCKET_ID },
     {
       headers: {
-        Authorization: authorizationToken
+        Authorization: authorizationToken,
+        'Content-Type': 'application/json'
       }
     }
   );
+  if (uploadUrlResp.status !== 200) {
+    throw new Error(`Failed get upload URL: ${uploadUrlResp.status} ${JSON.stringify(uploadUrlResp.data)}`);
+  }
 
-  const { uploadUrl, authorizationToken: uploadToken } = uploadUrlResponse.data;
+  const { uploadUrl, authorizationToken: uploadToken } = uploadUrlResp.data;
 
-  // Read file
-  const fileBuffer = fs.readFileSync(filePath);
-  
-  // Calculate SHA1
+  const fileBuffer = await promisify(fs.readFile)(localFilePath);
   const sha1 = crypto.createHash('sha1').update(fileBuffer).digest('hex');
 
-  // Upload file
-  const uploadResponse = await axios.post(uploadUrl, fileBuffer, {
+  const uploadResp = await axios.post(uploadUrl, fileBuffer, {
     headers: {
-      'Authorization': uploadToken,
-      'X-Bz-File-Name': encodeURIComponent(fileName),
+      Authorization: uploadToken,
+      'X-Bz-File-Name': encodeURIComponent(fileKey),
       'Content-Type': contentType,
       'Content-Length': fileBuffer.length,
       'X-Bz-Content-Sha1': sha1
     }
   });
 
+  if (uploadResp.status !== 200) {
+    throw new Error(`Upload to B2 failed: ${uploadResp.status} ${JSON.stringify(uploadResp.data)}`);
+  }
+
   return {
-    fileName: uploadResponse.data.fileName,
-    fileId: uploadResponse.data.fileId,
-    url: `${downloadUrl}/file/Lizard/${fileName}`
+    fileName: uploadResp.data.fileName,
+    fileId: uploadResp.data.fileId,
+    url: `${downloadUrl}/file/${process.env.B2_BUCKET_NAME}/${fileKey}`
   };
 }
 
-module.exports = handler;
-
+// The actual API handler
 export default async function handler(req, res) {
-  // Handle CORS preflight
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    res.status(200).end();
-    return;
-  }
-
-  // Apply CORS headers for POST
+  // CORS preflight handling
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
 
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    const { key: videoKey, userId, title, description } = req.body;
+    let body = req.body;
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch (e) {
+        console.error('Invalid JSON in request body:', body);
+        return res.status(400).json({ error: 'Invalid JSON body' });
+      }
+    }
+
+    const { key: videoKey, userId, title, description } = body;
     if (!videoKey || !userId) {
+      console.warn('Missing videoKey or userId', body);
       return res.status(400).json({ error: 'Missing parameters' });
     }
 
-    // Get B2 auth
-    const { authorizationToken, downloadUrl } = await getB2Auth();
+    console.log('saveMetadata: downloading video from B2:', videoKey);
 
-    // 1. Download uploaded video from B2
+    const auth = await getB2Auth();
+    const { authorizationToken, downloadUrl } = auth;
+
     const tempVideoPath = await downloadFromB2(videoKey, authorizationToken, downloadUrl);
 
-    // 2. Generate thumbnail
+    console.log('saveMetadata: generating thumbnail');
     const thumbnailPath = path.join(os.tmpdir(), `thumb-${Date.now()}.png`);
     await generateThumbnail(tempVideoPath, thumbnailPath);
 
-    // 3. Generate keys
     const metaTimestamp = Date.now();
     const thumbKey = `thumb-${userId}-${metaTimestamp}.png`;
     const metaKey = `meta-${userId}-${metaTimestamp}.json`;
 
-    // 4. Upload thumbnail to B2
+    console.log('saveMetadata: uploading thumbnail');
     const thumbUpload = await uploadToB2(thumbKey, thumbnailPath, 'image/png');
 
-    // 5. Build metadata object
+    console.log('saveMetadata: building metadata and uploading JSON');
     const metadata = {
       id: `${userId}-${metaTimestamp}`,
       userId,
-      title,
-      description,
+      title: title || '',
+      description: description || '',
       uploadedAt: new Date().toISOString(),
-      videoUrl: `${downloadUrl}/file/Lizard/${videoKey}`,
+      videoUrl: `${downloadUrl}/file/${process.env.B2_BUCKET_NAME}/${videoKey}`,
       thumbnailUrl: thumbUpload.url,
       hearts: 0,
       comments: 0,
       views: 0
     };
 
-    // 6. Upload metadata JSON to B2
-    const metadataJsonPath = path.join(os.tmpdir(), `meta-${Date.now()}.json`);
-    fs.writeFileSync(metadataJsonPath, JSON.stringify(metadata));
-    await uploadToB2(metaKey, metadataJsonPath, 'application/json');
+    const metaJsonPath = path.join(os.tmpdir(), `meta-${Date.now()}.json`);
+    await promisify(fs.writeFile)(metaJsonPath, JSON.stringify(metadata));
 
-    // Clean up temp files
-    fs.unlinkSync(tempVideoPath);
-    fs.unlinkSync(thumbnailPath);
-    fs.unlinkSync(metadataJsonPath);
+    await uploadToB2(metaKey, metaJsonPath, 'application/json');
 
-    res.status(200).json({ success: true, short: metadata });
-  } catch (error) {
-    console.error('Error in saveMetadata:', error);
-    res.status(500).json({ 
-      error: 'Failed in metadata', 
-      details: error.response?.data || error.message 
-    });
+    // Clean up local temp files
+    try {
+      fs.unlinkSync(tempVideoPath);
+      fs.unlinkSync(thumbnailPath);
+      fs.unlinkSync(metaJsonPath);
+    } catch (cleanupErr) {
+      console.warn('Cleanup error:', cleanupErr);
+    }
+
+    return res.status(200).json({ success: true, short: metadata });
+
+  } catch (err) {
+    console.error('Error in saveMetadata handler:', err);
+    // If axios error with `response` object, include that
+    const details = err.response?.data || err.message;
+    return res.status(500).json({ error: 'Failed in metadata', details });
   }
 }
+
+// Disable Next.js body parsing because we're handling streams/files
+export const config = {
+  api: {
+    bodyParser: false
+  }
+};
