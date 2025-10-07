@@ -1,26 +1,15 @@
-import AWS from 'aws-sdk';
+import axios from 'axios';
 
-const s3 = new AWS.S3({
-  endpoint: 'https://s3.eu-central-003.backblazeb2.com',
-  region: 'eu-central-003',
-  accessKeyId: process.env.B2_KEY_ID,
-  secretAccessKey: process.env.B2_SECRET,
-  s3ForcePathStyle: true,
-  signatureVersion: 'v4'
-});
-
+// Backblaze B2 Native API
 export default async function handler(req, res) {
-  // CORS preflight support
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
   if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     res.status(200).end();
     return;
   }
-
-  // Allow from any origin
-  res.setHeader('Access-Control-Allow-Origin', '*');
 
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
@@ -33,31 +22,48 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Missing parameters' });
   }
 
-  const timestamp = Date.now();
-  const key = `${userId}-${timestamp}-${filename}`;
-
-  const params = {
-    Bucket: 'Lizard',
-    Key: key,
-    Expires: 60 * 5,
-    ContentType: contentType
-    // ACL removed - Backblaze B2 doesn't fully support ACL in S3-compatible API
-    // Files will be accessible based on bucket settings
-  };
-
   try {
-    const uploadUrl = await s3.getSignedUrlPromise('putObject', params);
-    
-    // Return both the upload URL and the public URL
-    const publicUrl = `https://s3.eu-central-003.backblazeb2.com/Lizard/${key}`;
-    
-    res.status(200).json({ 
-      uploadUrl, 
+    // Step 1: Authorize with B2
+    const authResponse = await axios.get(
+      'https://api.backblazeb2.com/b2api/v2/b2_authorize_account',
+      {
+        auth: {
+          username: process.env.B2_KEY_ID,
+          password: process.env.B2_SECRET
+        }
+      }
+    );
+
+    const { authorizationToken, apiUrl } = authResponse.data;
+
+    // Step 2: Get upload URL
+    const uploadUrlResponse = await axios.post(
+      `${apiUrl}/b2api/v2/b2_get_upload_url`,
+      { bucketId: process.env.B2_BUCKET_ID },
+      {
+        headers: {
+          Authorization: authorizationToken
+        }
+      }
+    );
+
+    const { uploadUrl, authorizationToken: uploadToken } = uploadUrlResponse.data;
+
+    const timestamp = Date.now();
+    const key = `${userId}-${timestamp}-${filename}`;
+
+    // Return upload URL and token to frontend
+    res.status(200).json({
+      uploadUrl,
+      uploadToken,
       key,
-      publicUrl 
+      contentType
     });
   } catch (error) {
-    console.error('Error generating signed URL:', error);
-    res.status(500).json({ error: 'Could not generate signed URL' });
+    console.error('B2 API Error:', error.response?.data || error.message);
+    res.status(500).json({ 
+      error: 'Failed to get upload URL',
+      details: error.response?.data || error.message 
+    });
   }
 }
