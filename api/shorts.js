@@ -65,12 +65,20 @@ const s3 = new AWS.S3({
 });
 
 module.exports = async function handler(req, res) {
+  console.log('Handler called, method:', req.method);
+
+  // Check environment variables
+  if (!B2_KEY_ID || !B2_SECRET || !BUCKET_ID) {
+    console.error('Missing Backblaze credentials or bucket ID');
+    return res.status(500).json({ error: 'Server misconfiguration' });
+  }
+
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+    return res.status(204).end();
   }
 
   if (req.method !== 'GET') {
@@ -108,10 +116,18 @@ module.exports = async function handler(req, res) {
 
           // Generate signed URLs for video and thumbnail if not absolute
           if (metadata.videoUrl && !metadata.videoUrl.startsWith('http')) {
-            metadata.videoUrl = await generateSignedUrl(metadata.videoUrl);
+            try {
+              metadata.videoUrl = await generateSignedUrl(metadata.videoUrl);
+            } catch (e) {
+              console.error('Failed to generate signed URL for video:', e.message);
+            }
           }
           if (metadata.thumbnailUrl && !metadata.thumbnailUrl.startsWith('http')) {
-            metadata.thumbnailUrl = await generateSignedUrl(metadata.thumbnailUrl);
+            try {
+              metadata.thumbnailUrl = await generateSignedUrl(metadata.thumbnailUrl);
+            } catch (e) {
+              console.error('Failed to generate signed URL for thumbnail:', e.message);
+            }
           }
 
           return metadata;
@@ -142,4 +158,5 @@ module.exports = async function handler(req, res) {
     });
   }
 };
+
 
