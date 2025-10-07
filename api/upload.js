@@ -1,8 +1,7 @@
-// Use require for better Vercel compatibility
-const axios = require('axios');
+const fetch = require('node-fetch');
 
 // Backblaze B2 Native API Upload
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -25,30 +24,46 @@ export default async function handler(req, res) {
 
   try {
     // Step 1: Authorize with B2
-    const authResponse = await axios.get(
+    const authString = Buffer.from(`${process.env.B2_KEY_ID}:${process.env.B2_SECRET}`).toString('base64');
+    const authResponse = await fetch(
       'https://api.backblazeb2.com/b2api/v2/b2_authorize_account',
       {
-        auth: {
-          username: process.env.B2_KEY_ID,
-          password: process.env.B2_SECRET
+        headers: {
+          Authorization: `Basic ${authString}`
         }
       }
     );
 
-    const { authorizationToken, apiUrl } = authResponse.data;
+    if (!authResponse.ok) {
+      const errorText = await authResponse.text();
+      console.error('B2 Auth failed:', errorText);
+      throw new Error(`B2 Auth failed: ${authResponse.status}`);
+    }
+
+    const authData = await authResponse.json();
+    const { authorizationToken, apiUrl } = authData;
 
     // Step 2: Get upload URL
-    const uploadUrlResponse = await axios.post(
+    const uploadUrlResponse = await fetch(
       `${apiUrl}/b2api/v2/b2_get_upload_url`,
-      { bucketId: process.env.B2_BUCKET_ID },
       {
+        method: 'POST',
         headers: {
-          Authorization: authorizationToken
-        }
+          Authorization: authorizationToken,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ bucketId: process.env.B2_BUCKET_ID })
       }
     );
 
-    const { uploadUrl, authorizationToken: uploadToken } = uploadUrlResponse.data;
+    if (!uploadUrlResponse.ok) {
+      const errorText = await uploadUrlResponse.text();
+      console.error('Get upload URL failed:', errorText);
+      throw new Error(`Get upload URL failed: ${uploadUrlResponse.status}`);
+    }
+
+    const uploadData = await uploadUrlResponse.json();
+    const { uploadUrl, authorizationToken: uploadToken } = uploadData;
 
     const timestamp = Date.now();
     const key = `${userId}-${timestamp}-${filename}`;
@@ -61,10 +76,10 @@ export default async function handler(req, res) {
       contentType
     });
   } catch (error) {
-    console.error('B2 API Error:', error.response?.data || error.message);
+    console.error('B2 API Error:', error.message);
     res.status(500).json({ 
       error: 'Failed to get upload URL',
-      details: error.response?.data || error.message 
+      details: error.message 
     });
   }
 }
