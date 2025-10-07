@@ -4,9 +4,11 @@ const fetch = require('node-fetch');
 module.exports = async function handler(req, res) {
   console.log('=== Upload API Called ===');
   console.log('Method:', req.method);
-  console.log('Headers:', JSON.stringify(req.headers));
+  console.log('Content-Type header:', req.headers['content-type']);
   console.log('Body type:', typeof req.body);
-  console.log('Body:', req.body);
+  console.log('Body value:', JSON.stringify(req.body));
+  console.log('Body is null?', req.body === null);
+  console.log('Body is undefined?', req.body === undefined);
   
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -24,19 +26,28 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  // Parse body if needed
+  // Manually read body if not parsed
   let body = req.body;
-  console.log('Initial body:', body);
   
-  if (typeof body === 'string') {
-    console.log('Body is string, attempting to parse...');
-    try {
-      body = JSON.parse(body);
-      console.log('Parsed body:', body);
-    } catch (e) {
-      console.error('JSON parse error:', e.message);
-      return res.status(400).json({ error: 'Invalid JSON body', rawBody: body });
+  if (!body || Object.keys(body).length === 0) {
+    console.log('Body is empty or not parsed, reading manually...');
+    
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(chunk);
     }
+    const rawBody = Buffer.concat(chunks).toString('utf-8');
+    console.log('Raw body string:', rawBody);
+    
+    try {
+      body = JSON.parse(rawBody);
+      console.log('Manually parsed body:', body);
+    } catch (e) {
+      console.error('Manual parse error:', e.message);
+      return res.status(400).json({ error: 'Invalid JSON', rawBody });
+    }
+  } else {
+    console.log('Body already parsed:', body);
   }
 
   const { filename, contentType, userId } = body || {};
@@ -113,4 +124,3 @@ module.exports = async function handler(req, res) {
     });
   }
 }
-
