@@ -1,9 +1,10 @@
 {
   "name": "shorts-api",
   "version": "1.0.0",
+  "type": "module",
   "dependencies": {
     "aws-sdk": "^2.1490.0",
-    "axios": "^1.6.0",
+    "axios": "^1.7.7",
     "formidable-serverless": "^1.1.1",
     "fluent-ffmpeg": "^2.1.2",      
     "ffmpeg-static": "^5.1.0"    
