@@ -4,7 +4,7 @@ const AWS = require('aws-sdk');
 const B2_KEY_ID = process.env.B2_KEY_ID;
 const B2_SECRET = process.env.B2_SECRET;
 const BUCKET = 'Lizard';
-const BUCKET_ID = process.env.B2_BUCKET_ID; // You must provide your B2 Bucket ID here
+const BUCKET_ID = process.env.B2_BUCKET_ID;
 
 // Cache B2 auth info for reuse
 let b2Auth = null;
@@ -25,6 +25,8 @@ async function b2AuthorizeAccount() {
   });
 
   if (!res.ok) {
+    const errorText = await res.text();
+    console.error('B2 auth failed:', errorText);
     throw new Error(`Backblaze authorize failed: ${res.status} ${res.statusText}`);
   }
 
@@ -43,31 +45,42 @@ async function b2AuthorizeAccount() {
 
 // Generate signed URL for a given file
 async function generateSignedUrl(fileName) {
-  const { apiUrl, authToken } = await b2AuthorizeAccount();
+  try {
+    const { apiUrl, authToken, downloadUrl } = await b2AuthorizeAccount();
 
-  const res = await fetch(`${apiUrl}/b2api/v2/b2_get_download_authorization`, {
-    method: 'POST',
-    headers: {
-      Authorization: authToken,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      bucketId: BUCKET_ID,
-      fileNamePrefix: fileName,
-      validDurationInSeconds: 3600 // 1 hour access
-    })
-  });
+    const res = await fetch(`${apiUrl}/b2api/v2/b2_get_download_authorization`, {
+      method: 'POST',
+      headers: {
+        Authorization: authToken,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        bucketId: BUCKET_ID,
+        fileNamePrefix: fileName,
+        validDurationInSeconds: 86400 // 24 hours access
+      })
+    });
 
-  if (!res.ok) {
-    throw new Error(`Backblaze get_download_authorization failed: ${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.error('B2 download auth failed:', errorText);
+      throw new Error(`Backblaze get_download_authorization failed: ${res.status}`);
+    }
+
+    const data = await res.json();
+    const downloadAuthToken = data.authorizationToken;
+
+    // Use the correct download URL format
+    // For private buckets, we need to use the download URL with proper encoding
+    const encodedFileName = encodeURIComponent(fileName).replace(/%2F/g, '/');
+    const signedUrl = `${downloadUrl}/file/${BUCKET}/${encodedFileName}?Authorization=${downloadAuthToken}`;
+    
+    console.log('Generated signed URL for:', fileName);
+    return signedUrl;
+  } catch (error) {
+    console.error('Error generating signed URL:', error);
+    throw error;
   }
-
-  const data = await res.json();
-
-  const downloadAuthToken = data.authorizationToken;
-
-  // Construct full signed URL
-  return `https://f003.backblazeb2.com/file/${BUCKET}/${encodeURIComponent(fileName)}?Authorization=${downloadAuthToken}`;
 }
 
 // Your existing s3 client, still used for listing and fetching metadata
@@ -91,7 +104,7 @@ module.exports = async function handler(req, res) {
 
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
     return res.status(204).end();
@@ -119,6 +132,8 @@ module.exports = async function handler(req, res) {
       .map(item => item.Key)
       .filter(key => key.startsWith('meta-') && key.endsWith('.json'));
 
+    console.log('Found metadata files:', metadataKeys.length);
+
     // Fetch and parse metadata
     const shorts = await Promise.all(
       metadataKeys.map(async (key) => {
@@ -130,19 +145,24 @@ module.exports = async function handler(req, res) {
 
           const metadata = JSON.parse(obj.Body.toString('utf-8'));
 
-          // Generate signed URLs for video and thumbnail if not absolute
+          // Generate signed URLs for video and thumbnail
           if (metadata.videoUrl && !metadata.videoUrl.startsWith('http')) {
             try {
               metadata.videoUrl = await generateSignedUrl(metadata.videoUrl);
+              console.log('Video URL generated for:', metadata.title);
             } catch (e) {
-              console.error('Failed to generate signed URL for video:', e.message);
+              console.error('Failed to generate signed URL for video:', metadata.videoUrl, e.message);
+              metadata.videoUrl = null; // Set to null if failed
             }
           }
+          
           if (metadata.thumbnailUrl && !metadata.thumbnailUrl.startsWith('http')) {
             try {
               metadata.thumbnailUrl = await generateSignedUrl(metadata.thumbnailUrl);
+              console.log('Thumbnail URL generated for:', metadata.title);
             } catch (e) {
-              console.error('Failed to generate signed URL for thumbnail:', e.message);
+              console.error('Failed to generate signed URL for thumbnail:', metadata.thumbnailUrl, e.message);
+              metadata.thumbnailUrl = null; // Set to null if failed
             }
           }
 
@@ -164,6 +184,7 @@ module.exports = async function handler(req, res) {
     // Sort by uploadedAt descending
     filtered.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
 
+    console.log('Returning shorts:', filtered.length);
     res.json({ success: true, shorts: filtered });
 
   } catch (error) {
@@ -174,6 +195,4 @@ module.exports = async function handler(req, res) {
     });
   }
 };
-
-
 
