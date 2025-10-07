@@ -1,9 +1,10 @@
-import axios from 'axios';
-import ffmpeg from 'fluent-ffmpeg';
-import ffmpegPath from 'ffmpeg-static';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
+const axios = require('axios');
+const ffmpeg = require('fluent-ffmpeg');
+const ffmpegPath = require('ffmpeg-static');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const crypto = require('crypto');
 
 // Set ffmpeg path
 ffmpeg.setFfmpegPath(ffmpegPath);
