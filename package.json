@@ -1,7 +1,6 @@
 {
   "name": "shorts-api",
   "version": "1.0.0",
-  "type": "module",
   "dependencies": {
     "aws-sdk": "^2.1490.0",
     "axios": "^1.7.7",
