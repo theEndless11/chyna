@@ -26,10 +26,30 @@ module.exports = async function handler(req, res) {
     const key = req.headers['x-file-key'];
     const contentType = req.headers['x-content-type'];
     
-    console.log('Upload params:', { uploadUrl: uploadUrl?.substring(0, 50), key, contentType });
+    console.log('Upload params:', { 
+      uploadUrl: uploadUrl?.substring(0, 60) + '...', 
+      key, 
+      contentType,
+      hasToken: !!uploadToken 
+    });
 
     if (!uploadUrl || !uploadToken || !key || !contentType) {
-      return res.status(400).json({ error: 'Missing parameters' });
+      console.error('Missing parameters:', { uploadUrl: !!uploadUrl, uploadToken: !!uploadToken, key: !!key, contentType: !!contentType });
+      return res.status(400).json({ 
+        error: 'Missing parameters',
+        missing: {
+          uploadUrl: !uploadUrl,
+          uploadToken: !uploadToken,
+          key: !key,
+          contentType: !contentType
+        }
+      });
+    }
+
+    // Validate URL
+    if (!uploadUrl.startsWith('http://') && !uploadUrl.startsWith('https://')) {
+      console.error('Invalid upload URL:', uploadUrl);
+      return res.status(400).json({ error: 'Invalid upload URL' });
     }
 
     // Read video file from request
