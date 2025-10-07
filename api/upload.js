@@ -16,7 +16,17 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  const { filename, contentType, userId } = req.body;
+  // Parse body if needed
+  let body = req.body;
+  if (typeof body === 'string') {
+    try {
+      body = JSON.parse(body);
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid JSON body' });
+    }
+  }
+
+  const { filename, contentType, userId } = body;
 
   if (!filename || !contentType || !userId) {
     return res.status(400).json({ error: 'Missing parameters' });
