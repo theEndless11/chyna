@@ -115,10 +115,10 @@ async function uploadToB2(fileName, filePath, contentType) {
 
   const uploadResult = await uploadResponse.json();
 
+  // Return just the filename, not the full URL
   return {
     fileName: uploadResult.fileName,
-    fileId: uploadResult.fileId,
-    url: `${downloadUrl}/file/Lizard/${fileName}`
+    fileId: uploadResult.fileId
   };
 }
 
@@ -175,15 +175,15 @@ export default async function handler(req, res) {
     // 4. Upload thumbnail to B2
     const thumbUpload = await uploadToB2(thumbKey, thumbnailPath, 'image/png');
 
-    // 5. Build metadata object
+    // 5. Build metadata object - FIXED: Store only filenames, not full URLs
     const metadata = {
       id: `${userId}-${metaTimestamp}`,
       userId,
       title,
       description,
       uploadedAt: new Date().toISOString(),
-      videoUrl: `${downloadUrl}/file/Lizard/${videoKey}`,
-      thumbnailUrl: thumbUpload.url,
+      videoUrl: videoKey,  // FIXED: Just the filename
+      thumbnailUrl: thumbKey,  // FIXED: Just the filename
       hearts: 0,
       comments: 0,
       views: 0
