@@ -2,68 +2,76 @@ const fetch = require('node-fetch');
 
 // Backblaze B2 Native API Upload
 module.exports = async function handler(req, res) {
-  console.log('=== Upload API Called ===');
-  console.log('Method:', req.method);
-  console.log('Content-Type header:', req.headers['content-type']);
-  console.log('Body type:', typeof req.body);
-  console.log('Body value:', JSON.stringify(req.body));
-  console.log('Body is null?', req.body === null);
-  console.log('Body is undefined?', req.body === undefined);
-  
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') {
-    console.log('OPTIONS request - returning 200');
-    res.status(200).end();
-    return;
-  }
-
-  if (req.method !== 'POST') {
-    console.log('Invalid method:', req.method);
-    res.status(405).json({ error: 'Method not allowed' });
-    return;
-  }
-
-  // Manually read body if not parsed
-  let body = req.body;
-  
-  if (!body || Object.keys(body).length === 0) {
-    console.log('Body is empty or not parsed, reading manually...');
-    
-    const chunks = [];
-    for await (const chunk of req) {
-      chunks.push(chunk);
-    }
-    const rawBody = Buffer.concat(chunks).toString('utf-8');
-    console.log('Raw body string:', rawBody);
-    
-    try {
-      body = JSON.parse(rawBody);
-      console.log('Manually parsed body:', body);
-    } catch (e) {
-      console.error('Manual parse error:', e.message);
-      return res.status(400).json({ error: 'Invalid JSON', rawBody });
-    }
-  } else {
-    console.log('Body already parsed:', body);
-  }
-
-  const { filename, contentType, userId } = body || {};
-  console.log('Extracted params:', { filename, contentType, userId });
-
-  if (!filename || !contentType || !userId) {
-    console.log('Missing params - returning 400');
-    return res.status(400).json({ 
-      error: 'Missing parameters', 
-      received: { filename, contentType, userId },
-      bodyType: typeof req.body,
-      body: req.body
-    });
-  }
-
   try {
+    console.log('=== Upload API Called ===');
+    console.log('Method:', req.method);
+    
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') {
+      console.log('OPTIONS request');
+      return res.status(200).end();
+    }
+
+    if (req.method !== 'POST') {
+      console.log('Wrong method');
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+
+    console.log('About to check body...');
+    console.log('req.body exists?', !!req.body);
+    console.log('req.body type:', typeof req.body);
+    
+    let body = req.body;
+    
+    // If body is not parsed, read it manually
+    if (!body) {
+      console.log('Body is null/undefined, reading stream...');
+      const buffers = [];
+      
+      req.on('data', chunk => {
+        console.log('Received chunk:', chunk.length, 'bytes');
+        buffers.push(chunk);
+      });
+      
+      await new Promise((resolve, reject) => {
+        req.on('end', () => {
+          console.log('Stream ended');
+          resolve();
+        });
+        req.on('error', (err) => {
+          console.error('Stream error:', err);
+          reject(err);
+        });
+      });
+      
+      const rawBody = Buffer.concat(buffers).toString('utf-8');
+      console.log('Raw body:', rawBody);
+      
+      try {
+        body = JSON.parse(rawBody);
+      } catch (e) {
+        console.error('Parse error:', e.message);
+        return res.status(400).json({ error: 'Invalid JSON', raw: rawBody });
+      }
+    }
+
+    console.log('Parsed body:', JSON.stringify(body));
+
+    const { filename, contentType, userId } = body;
+    console.log('Extracted:', { filename, contentType, userId });
+
+    if (!filename || !contentType || !userId) {
+      return res.status(400).json({ 
+        error: 'Missing parameters', 
+        received: { filename, contentType, userId }
+      });
+    }
+
+    console.log('Calling B2 API...');
+
     // Step 1: Authorize with B2
     const authString = Buffer.from(`${process.env.B2_KEY_ID}:${process.env.B2_SECRET}`).toString('base64');
     const authResponse = await fetch(
@@ -83,6 +91,7 @@ module.exports = async function handler(req, res) {
 
     const authData = await authResponse.json();
     const { authorizationToken, apiUrl } = authData;
+    console.log('B2 authorized, apiUrl:', apiUrl);
 
     // Step 2: Get upload URL
     const uploadUrlResponse = await fetch(
@@ -105,20 +114,25 @@ module.exports = async function handler(req, res) {
 
     const uploadData = await uploadUrlResponse.json();
     const { uploadUrl, authorizationToken: uploadToken } = uploadData;
+    console.log('Got upload URL');
 
     const timestamp = Date.now();
     const key = `${userId}-${timestamp}-${filename}`;
 
+    console.log('Returning success with key:', key);
+
     // Return upload URL and token to frontend
-    res.status(200).json({
+    return res.status(200).json({
       uploadUrl,
       uploadToken,
       key,
       contentType
     });
   } catch (error) {
-    console.error('B2 API Error:', error.message);
-    res.status(500).json({ 
+    console.error('=== ERROR ===');
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    return res.status(500).json({ 
       error: 'Failed to get upload URL',
       details: error.message 
     });
