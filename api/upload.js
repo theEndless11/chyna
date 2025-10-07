@@ -1,6 +1,7 @@
-import axios from 'axios';
+// Use require for better Vercel compatibility
+const axios = require('axios');
 
-// Backblaze B2 Native API
+// Backblaze B2 Native API Upload
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
