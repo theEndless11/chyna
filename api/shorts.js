@@ -67,13 +67,23 @@ module.exports = async function handler(req, res) {
           
           const metadata = JSON.parse(body);
           
+          console.log('Original URLs:', { 
+            videoUrl: metadata.videoUrl, 
+            thumbnailUrl: metadata.thumbnailUrl 
+          });
+          
           // Ensure URLs are absolute
           if (metadata.videoUrl && !metadata.videoUrl.startsWith('http')) {
-            metadata.videoUrl = `https://s3.eu-central-003.backblazeb2.com/Lizard/${metadata.videoUrl}`;
+            metadata.videoUrl = `https://s3.eu-central-003.backblazeb2.com/${BUCKET}/${metadata.videoUrl}`;
           }
           if (metadata.thumbnailUrl && !metadata.thumbnailUrl.startsWith('http')) {
-            metadata.thumbnailUrl = `https://s3.eu-central-003.backblazeb2.com/Lizard/${metadata.thumbnailUrl}`;
+            metadata.thumbnailUrl = `https://s3.eu-central-003.backblazeb2.com/${BUCKET}/${metadata.thumbnailUrl}`;
           }
+          
+          console.log('Final URLs:', { 
+            videoUrl: metadata.videoUrl, 
+            thumbnailUrl: metadata.thumbnailUrl 
+          });
           
           return metadata;
         } catch (e) {
