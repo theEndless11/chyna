@@ -1,4 +1,4 @@
-const axios = require('axios');
+const fetch = require('node-fetch');
 const AWS = require('aws-sdk');
 
 const B2_KEY_ID = process.env.B2_KEY_ID;
@@ -19,14 +19,21 @@ async function b2AuthorizeAccount() {
 
   const auth = Buffer.from(`${B2_KEY_ID}:${B2_SECRET}`).toString('base64');
 
-  const res = await axios.get('https://api.backblazeb2.com/b2api/v2/b2_authorize_account', {
+  const res = await fetch('https://api.backblazeb2.com/b2api/v2/b2_authorize_account', {
+    method: 'GET',
     headers: { Authorization: `Basic ${auth}` }
   });
 
+  if (!res.ok) {
+    throw new Error(`Backblaze authorize failed: ${res.status} ${res.statusText}`);
+  }
+
+  const data = await res.json();
+
   b2Auth = {
-    apiUrl: res.data.apiUrl,
-    downloadUrl: res.data.downloadUrl,
-    authToken: res.data.authorizationToken,
+    apiUrl: data.apiUrl,
+    downloadUrl: data.downloadUrl,
+    authToken: data.authorizationToken,
   };
   // Token expires in 24 hours, refresh 5 min before expiry
   b2AuthExpiresAt = now + (24 * 60 * 60 * 1000) - (5 * 60 * 1000);
@@ -38,18 +45,27 @@ async function b2AuthorizeAccount() {
 async function generateSignedUrl(fileName) {
   const { apiUrl, authToken } = await b2AuthorizeAccount();
 
-  const res = await axios.post(`${apiUrl}/b2api/v2/b2_get_download_authorization`, {
-    bucketId: BUCKET_ID,
-    fileNamePrefix: fileName,
-    validDurationInSeconds: 3600 // 1 hour access
-  }, {
+  const res = await fetch(`${apiUrl}/b2api/v2/b2_get_download_authorization`, {
+    method: 'POST',
     headers: {
       Authorization: authToken,
       'Content-Type': 'application/json'
-    }
+    },
+    body: JSON.stringify({
+      bucketId: BUCKET_ID,
+      fileNamePrefix: fileName,
+      validDurationInSeconds: 3600 // 1 hour access
+    })
   });
 
-  const downloadAuthToken = res.data.authorizationToken;
+  if (!res.ok) {
+    throw new Error(`Backblaze get_download_authorization failed: ${res.status} ${res.statusText}`);
+  }
+
+  const data = await res.json();
+
+  const downloadAuthToken = data.authorizationToken;
+
   // Construct full signed URL
   return `https://f003.backblazeb2.com/file/${BUCKET}/${encodeURIComponent(fileName)}?Authorization=${downloadAuthToken}`;
 }
@@ -158,5 +174,6 @@ module.exports = async function handler(req, res) {
     });
   }
 };
+
 
 
